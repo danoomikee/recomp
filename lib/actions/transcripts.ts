@@ -1,30 +1,32 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { connectToDatabase } from "@/lib/database"
-import { CreateTranscriptSchema, type Transcript, type CreateTranscriptInput } from "@/lib/schemas"
-import { nanoid } from "nanoid"
+import { prisma, searchTranscriptSegments } from "@/lib/database"
+import { CreateTranscriptSchema, type CreateTranscriptInput } from "@/lib/schemas"
 
 export async function createTranscript(input: CreateTranscriptInput) {
   try {
     const validatedInput = CreateTranscriptSchema.parse(input)
-    const { transcriptsCollection } = await connectToDatabase()
 
-    const transcript: Transcript = {
-      id: nanoid(),
-      name: validatedInput.name,
-      filename: validatedInput.filename,
-      uploadedAt: new Date(),
-      segments: validatedInput.segments,
-      totalDuration: Math.max(...validatedInput.segments.map((s) => s.endTime)),
-      segmentCount: validatedInput.segments.length,
-    }
-
-    const result = await transcriptsCollection.insertOne(transcript)
-
-    if (!result.insertedId) {
-      throw new Error("Failed to create transcript")
-    }
+    const transcript = await prisma.transcript.create({
+      data: {
+        name: validatedInput.name,
+        filename: validatedInput.filename,
+        totalDuration: Math.max(...validatedInput.segments.map((s) => s.endTime)),
+        segmentCount: validatedInput.segments.length,
+        segments: {
+          create: validatedInput.segments.map((segment) => ({
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            text: segment.text,
+            index: segment.index,
+          })),
+        },
+      },
+      include: {
+        segments: true,
+      },
+    })
 
     revalidatePath("/library")
     return { success: true, transcript }
@@ -36,13 +38,16 @@ export async function createTranscript(input: CreateTranscriptInput) {
 
 export async function getTranscripts() {
   try {
-    const { transcriptsCollection } = await connectToDatabase()
-    const transcripts = await transcriptsCollection.find({}).sort({ uploadedAt: -1 }).toArray()
+    const transcripts = await prisma.transcript.findMany({
+      include: {
+        segments: {
+          orderBy: { index: "asc" },
+        },
+      },
+      orderBy: { uploadedAt: "desc" },
+    })
 
-    return transcripts.map((transcript) => ({
-      ...transcript,
-      _id: transcript._id?.toString(),
-    }))
+    return transcripts
   } catch (error) {
     console.error("Error fetching transcripts:", error)
     return []
@@ -51,17 +56,16 @@ export async function getTranscripts() {
 
 export async function getTranscriptById(id: string) {
   try {
-    const { transcriptsCollection } = await connectToDatabase()
-    const transcript = await transcriptsCollection.findOne({ id })
+    const transcript = await prisma.transcript.findUnique({
+      where: { id },
+      include: {
+        segments: {
+          orderBy: { index: "asc" },
+        },
+      },
+    })
 
-    if (!transcript) {
-      return null
-    }
-
-    return {
-      ...transcript,
-      _id: transcript._id?.toString(),
-    }
+    return transcript
   } catch (error) {
     console.error("Error fetching transcript:", error)
     return null
@@ -70,12 +74,9 @@ export async function getTranscriptById(id: string) {
 
 export async function deleteTranscript(id: string) {
   try {
-    const { transcriptsCollection } = await connectToDatabase()
-    const result = await transcriptsCollection.deleteOne({ id })
-
-    if (result.deletedCount === 0) {
-      throw new Error("Transcript not found")
-    }
+    await prisma.transcript.delete({
+      where: { id },
+    })
 
     revalidatePath("/library")
     return { success: true }
@@ -87,37 +88,43 @@ export async function deleteTranscript(id: string) {
 
 export async function searchTranscripts(query: string, transcriptIds?: string[]) {
   try {
-    const { transcriptsCollection } = await connectToDatabase()
+    const segments = await searchTranscriptSegments(query, transcriptIds)
 
-    const filter: any = {
-      $text: { $search: query },
-    }
+    // Build results with context
+    const results = await Promise.all(
+      segments.map(async (segment) => {
+        // Get context segments around the match
+        const contextSegments = await prisma.subtitleSegment.findMany({
+          where: {
+            transcriptId: segment.transcriptId,
+            index: {
+              gte: Math.max(0, segment.index - 2),
+              lte: segment.index + 2,
+            },
+          },
+          orderBy: { index: "asc" },
+        })
 
-    if (transcriptIds && transcriptIds.length > 0) {
-      filter.id = { $in: transcriptIds }
-    }
-
-    const transcripts = await transcriptsCollection
-      .find(filter, { score: { $meta: "textScore" } })
-      .sort({ score: { $meta: "textScore" } })
-      .toArray()
-
-    // Find matching segments within each transcript
-    const results = transcripts.flatMap((transcript) => {
-      const matchingSegments = transcript.segments.filter((segment) =>
-        segment.text.toLowerCase().includes(query.toLowerCase()),
-      )
-
-      return matchingSegments.map((segment) => ({
-        transcriptId: transcript.id,
-        transcriptName: transcript.name,
-        segment,
-        context: transcript.segments.slice(
-          Math.max(0, segment.index - 2),
-          Math.min(transcript.segments.length, segment.index + 3),
-        ),
-      }))
-    })
+        return {
+          transcriptId: segment.transcriptId,
+          transcriptName: segment.transcript.name,
+          segment: {
+            id: segment.id,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            text: segment.text,
+            index: segment.index,
+          },
+          context: contextSegments.map((s) => ({
+            id: s.id,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            text: s.text,
+            index: s.index,
+          })),
+        }
+      }),
+    )
 
     return results
   } catch (error) {

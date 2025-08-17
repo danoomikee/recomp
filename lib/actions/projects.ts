@@ -1,36 +1,35 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { connectToDatabase } from "@/lib/database"
+import { prisma } from "@/lib/database"
 import {
   CreateProjectSchema,
   UpdateProjectSchema,
-  type Project,
   type CreateProjectInput,
   type UpdateProjectInput,
 } from "@/lib/schemas"
-import { nanoid } from "nanoid"
 
 export async function createProject(input: CreateProjectInput) {
   try {
     const validatedInput = CreateProjectSchema.parse(input)
-    const { projectsCollection } = await connectToDatabase()
 
-    const project: Project = {
-      id: nanoid(),
-      name: validatedInput.name,
-      description: validatedInput.description || "",
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      transcriptIds: [],
-      aggregates: [],
-    }
-
-    const result = await projectsCollection.insertOne(project)
-
-    if (!result.insertedId) {
-      throw new Error("Failed to create project")
-    }
+    const project = await prisma.project.create({
+      data: {
+        name: validatedInput.name,
+        description: validatedInput.description || "",
+      },
+      include: {
+        transcripts: true,
+        aggregates: {
+          include: {
+            transcript: {
+              select: { name: true },
+            },
+          },
+          orderBy: { order: "asc" },
+        },
+      },
+    })
 
     revalidatePath("/projects")
     return { success: true, project }
@@ -42,13 +41,19 @@ export async function createProject(input: CreateProjectInput) {
 
 export async function getProjects() {
   try {
-    const { projectsCollection } = await connectToDatabase()
-    const projects = await projectsCollection.find({}).sort({ updatedAt: -1 }).toArray()
+    const projects = await prisma.project.findMany({
+      include: {
+        transcripts: {
+          select: { id: true, name: true },
+        },
+        aggregates: {
+          select: { id: true },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+    })
 
-    return projects.map((project) => ({
-      ...project,
-      _id: project._id?.toString(),
-    }))
+    return projects
   } catch (error) {
     console.error("Error fetching projects:", error)
     return []
@@ -57,17 +62,28 @@ export async function getProjects() {
 
 export async function getProjectById(id: string) {
   try {
-    const { projectsCollection } = await connectToDatabase()
-    const project = await projectsCollection.findOne({ id })
+    const project = await prisma.project.findUnique({
+      where: { id },
+      include: {
+        transcripts: {
+          include: {
+            segments: {
+              orderBy: { index: "asc" },
+            },
+          },
+        },
+        aggregates: {
+          include: {
+            transcript: {
+              select: { name: true },
+            },
+          },
+          orderBy: { order: "asc" },
+        },
+      },
+    })
 
-    if (!project) {
-      return null
-    }
-
-    return {
-      ...project,
-      _id: project._id?.toString(),
-    }
+    return project
   } catch (error) {
     console.error("Error fetching project:", error)
     return null
@@ -77,18 +93,27 @@ export async function getProjectById(id: string) {
 export async function updateProject(id: string, input: UpdateProjectInput) {
   try {
     const validatedInput = UpdateProjectSchema.parse(input)
-    const { projectsCollection } = await connectToDatabase()
 
-    const updateData = {
-      ...validatedInput,
+    const updateData: any = {
       updatedAt: new Date(),
     }
 
-    const result = await projectsCollection.updateOne({ id }, { $set: updateData })
-
-    if (result.matchedCount === 0) {
-      throw new Error("Project not found")
+    if (validatedInput.name !== undefined) {
+      updateData.name = validatedInput.name
     }
+    if (validatedInput.description !== undefined) {
+      updateData.description = validatedInput.description
+    }
+    if (validatedInput.transcriptIds !== undefined) {
+      updateData.transcripts = {
+        set: validatedInput.transcriptIds.map((id) => ({ id })),
+      }
+    }
+
+    await prisma.project.update({
+      where: { id },
+      data: updateData,
+    })
 
     revalidatePath("/projects")
     revalidatePath(`/projects/${id}`)
@@ -101,17 +126,54 @@ export async function updateProject(id: string, input: UpdateProjectInput) {
 
 export async function deleteProject(id: string) {
   try {
-    const { projectsCollection } = await connectToDatabase()
-    const result = await projectsCollection.deleteOne({ id })
-
-    if (result.deletedCount === 0) {
-      throw new Error("Project not found")
-    }
+    await prisma.project.delete({
+      where: { id },
+    })
 
     revalidatePath("/projects")
     return { success: true }
   } catch (error) {
     console.error("Error deleting project:", error)
     return { success: false, error: "Failed to delete project" }
+  }
+}
+
+export async function addTranscriptToProject(projectId: string, transcriptId: string) {
+  try {
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        transcripts: {
+          connect: { id: transcriptId },
+        },
+        updatedAt: new Date(),
+      },
+    })
+
+    revalidatePath(`/projects/${projectId}`)
+    return { success: true }
+  } catch (error) {
+    console.error("Error adding transcript to project:", error)
+    return { success: false, error: "Failed to add transcript to project" }
+  }
+}
+
+export async function removeTranscriptFromProject(projectId: string, transcriptId: string) {
+  try {
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        transcripts: {
+          disconnect: { id: transcriptId },
+        },
+        updatedAt: new Date(),
+      },
+    })
+
+    revalidatePath(`/projects/${projectId}`)
+    return { success: true }
+  } catch (error) {
+    console.error("Error removing transcript from project:", error)
+    return { success: false, error: "Failed to remove transcript from project" }
   }
 }

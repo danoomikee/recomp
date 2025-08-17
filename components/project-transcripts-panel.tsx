@@ -1,16 +1,13 @@
 "use client"
-
-import { useState, useEffect } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { FileText, Clock, X } from "lucide-react"
 import { TranscriptSelector } from "./transcript-selector"
-import { getTranscriptById } from "@/lib/actions/transcripts"
-import { updateProject } from "@/lib/actions/projects"
+import { removeTranscriptFromProject } from "@/lib/actions/projects"
 import { useToast } from "@/hooks/use-toast"
 import { formatTime } from "@/lib/subtitle-parser"
-import type { Transcript, Project } from "@/lib/schemas"
+import type { Project } from "@/lib/schemas"
 
 interface ProjectTranscriptsPanelProps {
   project: Project
@@ -18,42 +15,19 @@ interface ProjectTranscriptsPanelProps {
 }
 
 export function ProjectTranscriptsPanel({ project, onProjectUpdate }: ProjectTranscriptsPanelProps) {
-  const [transcripts, setTranscripts] = useState<Transcript[]>([])
-  const [isLoading, setIsLoading] = useState(false)
   const { toast } = useToast()
 
-  useEffect(() => {
-    loadTranscripts()
-  }, [project.transcriptIds])
-
-  const loadTranscripts = async () => {
-    if (project.transcriptIds.length === 0) {
-      setTranscripts([])
-      return
-    }
-
-    setIsLoading(true)
-    try {
-      const transcriptPromises = project.transcriptIds.map((id) => getTranscriptById(id))
-      const results = await Promise.all(transcriptPromises)
-      const validTranscripts = results.filter((t): t is Transcript => t !== null)
-      setTranscripts(validTranscripts)
-    } catch (error) {
-      console.error("Failed to load transcripts:", error)
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  const transcripts = project.transcripts || []
 
   const removeTranscript = async (transcriptId: string) => {
     try {
-      const updatedIds = project.transcriptIds.filter((id) => id !== transcriptId)
-      const result = await updateProject(project.id, {
-        transcriptIds: updatedIds,
-      })
+      const result = await removeTranscriptFromProject(project.id, transcriptId)
 
       if (result.success) {
-        const updatedProject = { ...project, transcriptIds: updatedIds }
+        const updatedProject = {
+          ...project,
+          transcripts: transcripts.filter((t) => t.id !== transcriptId),
+        }
         onProjectUpdate(updatedProject)
         toast({
           title: "Transcript removed",
@@ -76,18 +50,12 @@ export function ProjectTranscriptsPanel({ project, onProjectUpdate }: ProjectTra
           <h3 className="font-semibold font-space-grotesk">Project Transcripts</h3>
           <TranscriptSelector project={project} onProjectUpdate={onProjectUpdate} />
         </div>
-        <p className="text-sm text-muted-foreground">{project.transcriptIds.length} transcripts loaded</p>
+        <p className="text-sm text-muted-foreground">{transcripts.length} transcripts loaded</p>
       </div>
 
       <ScrollArea className="flex-1">
         <div className="p-4">
-          {isLoading ? (
-            <div className="space-y-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="h-16 bg-muted animate-pulse rounded-lg" />
-              ))}
-            </div>
-          ) : transcripts.length > 0 ? (
+          {transcripts.length > 0 ? (
             <div className="space-y-3">
               {transcripts.map((transcript) => (
                 <div key={transcript.id} className="border rounded-lg p-3 hover:bg-muted/50 transition-colors">

@@ -91,7 +91,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
         <div className="flex items-center space-x-4 text-sm text-muted-foreground">
           <div className="flex items-center space-x-1">
             <FileText className="h-4 w-4" />
-            <span>{project.transcriptIds.length} transcripts</span>
+            <span>{project.transcripts?.length || 0} transcripts</span>
           </div>
           <div className="flex items-center space-x-1">
             <Calendar className="h-4 w-4" />
@@ -100,7 +100,7 @@ export function ProjectCard({ project }: ProjectCardProps) {
         </div>
         <div className="mt-3">
           <Badge variant="secondary" className="text-xs">
-            {project.aggregates.length} aggregates
+            {project.aggregates?.length || 0} aggregates
           </Badge>
         </div>
       </CardContent>

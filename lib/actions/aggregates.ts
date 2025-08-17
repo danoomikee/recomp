@@ -1,9 +1,8 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { connectToDatabase } from "@/lib/database"
-import type { Aggregate, SubtitleSegment } from "@/lib/schemas"
-import { nanoid } from "nanoid"
+import { prisma } from "@/lib/database"
+import type { SubtitleSegment } from "@/lib/schemas"
 
 export async function createAggregate(
   projectId: string,
@@ -13,30 +12,29 @@ export async function createAggregate(
   segments: SubtitleSegment[],
 ) {
   try {
-    const { projectsCollection } = await connectToDatabase()
-
-    const aggregate: Aggregate = {
-      id: nanoid(),
-      transcriptId,
-      startSegmentIndex,
-      endSegmentIndex,
-      text: segments.map((s) => s.text).join(" "),
-      startTime: segments[0].startTime,
-      endTime: segments[segments.length - 1].endTime,
-      createdAt: new Date(),
-    }
-
-    const result = await projectsCollection.updateOne(
-      { id: projectId },
-      {
-        $push: { aggregates: aggregate },
-        $set: { updatedAt: new Date() },
+    const aggregate = await prisma.aggregate.create({
+      data: {
+        transcriptId,
+        projectId,
+        startSegmentIndex,
+        endSegmentIndex,
+        text: segments.map((s) => s.text).join(" "),
+        startTime: segments[0].startTime,
+        endTime: segments[segments.length - 1].endTime,
+        order: await getNextAggregateOrder(projectId),
       },
-    )
+      include: {
+        transcript: {
+          select: { name: true },
+        },
+      },
+    })
 
-    if (result.matchedCount === 0) {
-      throw new Error("Project not found")
-    }
+    // Update project's updatedAt timestamp
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { updatedAt: new Date() },
+    })
 
     revalidatePath(`/projects/${projectId}`)
     return { success: true, aggregate }
@@ -48,19 +46,15 @@ export async function createAggregate(
 
 export async function deleteAggregate(projectId: string, aggregateId: string) {
   try {
-    const { projectsCollection } = await connectToDatabase()
+    await prisma.aggregate.delete({
+      where: { id: aggregateId },
+    })
 
-    const result = await projectsCollection.updateOne(
-      { id: projectId },
-      {
-        $pull: { aggregates: { id: aggregateId } },
-        $set: { updatedAt: new Date() },
-      },
-    )
-
-    if (result.matchedCount === 0) {
-      throw new Error("Project not found")
-    }
+    // Update project's updatedAt timestamp
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { updatedAt: new Date() },
+    })
 
     revalidatePath(`/projects/${projectId}`)
     return { success: true }
@@ -70,23 +64,22 @@ export async function deleteAggregate(projectId: string, aggregateId: string) {
   }
 }
 
-export async function reorderAggregates(projectId: string, aggregates: Aggregate[]) {
+export async function reorderAggregates(projectId: string, aggregateIds: string[]) {
   try {
-    const { projectsCollection } = await connectToDatabase()
-
-    const result = await projectsCollection.updateOne(
-      { id: projectId },
-      {
-        $set: {
-          aggregates,
-          updatedAt: new Date(),
-        },
-      },
+    await prisma.$transaction(
+      aggregateIds.map((id, index) =>
+        prisma.aggregate.update({
+          where: { id },
+          data: { order: index },
+        }),
+      ),
     )
 
-    if (result.matchedCount === 0) {
-      throw new Error("Project not found")
-    }
+    // Update project's updatedAt timestamp
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { updatedAt: new Date() },
+    })
 
     revalidatePath(`/projects/${projectId}`)
     return { success: true }
@@ -94,4 +87,15 @@ export async function reorderAggregates(projectId: string, aggregates: Aggregate
     console.error("Error reordering aggregates:", error)
     return { success: false, error: "Failed to reorder aggregates" }
   }
+}
+
+// Helper function to get the next order value for aggregates
+async function getNextAggregateOrder(projectId: string): Promise<number> {
+  const lastAggregate = await prisma.aggregate.findFirst({
+    where: { projectId },
+    orderBy: { order: "desc" },
+    select: { order: true },
+  })
+
+  return (lastAggregate?.order ?? -1) + 1
 }

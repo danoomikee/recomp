@@ -1,4 +1,10 @@
 import { z } from "zod"
+import type {
+  Transcript as PrismaTranscript,
+  Project as PrismaProject,
+  Aggregate as PrismaAggregate,
+  SubtitleSegment as PrismaSubtitleSegment,
+} from "@prisma/client"
 
 // Subtitle segment schema - individual lines with timing
 export const SubtitleSegmentSchema = z.object({
@@ -9,9 +15,7 @@ export const SubtitleSegmentSchema = z.object({
   index: z.number(), // order in the transcript
 })
 
-// Transcript schema - collection of subtitle segments
 export const TranscriptSchema = z.object({
-  _id: z.string().optional(),
   id: z.string(),
   name: z.string(),
   filename: z.string(),
@@ -21,7 +25,6 @@ export const TranscriptSchema = z.object({
   segmentCount: z.number(),
 })
 
-// Aggregate schema - sequence of consecutive segments from a single transcript
 export const AggregateSchema = z.object({
   id: z.string(),
   transcriptId: z.string(),
@@ -31,18 +34,17 @@ export const AggregateSchema = z.object({
   startTime: z.number(),
   endTime: z.number(),
   createdAt: z.date(),
+  order: z.number().optional(),
 })
 
-// Project schema - workspace for recomposition
 export const ProjectSchema = z.object({
-  _id: z.string().optional(),
   id: z.string(),
   name: z.string(),
   description: z.string().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
-  transcriptIds: z.array(z.string()), // loaded transcripts
-  aggregates: z.array(AggregateSchema), // arranged narrative sequence
+  transcriptIds: z.array(z.string()).optional(),
+  aggregates: z.array(AggregateSchema).optional(),
 })
 
 // Form schemas for validation
@@ -64,11 +66,19 @@ export const UpdateProjectSchema = z.object({
   aggregates: z.array(AggregateSchema).optional(),
 })
 
-// Type exports
-export type SubtitleSegment = z.infer<typeof SubtitleSegmentSchema>
-export type Transcript = z.infer<typeof TranscriptSchema>
-export type Aggregate = z.infer<typeof AggregateSchema>
-export type Project = z.infer<typeof ProjectSchema>
+export type SubtitleSegment = PrismaSubtitleSegment
+export type Transcript = PrismaTranscript & {
+  segments: SubtitleSegment[]
+}
+export type Aggregate = PrismaAggregate & {
+  transcript?: { name: string }
+}
+export type Project = PrismaProject & {
+  transcripts?: Transcript[]
+  aggregates?: Aggregate[]
+}
+
+// Keep form input types using Zod inference
 export type CreateTranscriptInput = z.infer<typeof CreateTranscriptSchema>
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>
 export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>

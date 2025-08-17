@@ -1,0 +1,76 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Transcript {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  name          String
+  filename      String
+  uploadedAt    DateTime @default(now())
+  totalDuration Int      // in milliseconds
+  segmentCount  Int
+  segments      SubtitleSegment[]
+  
+  // Relations
+  projects      Project[] @relation(fields: [projectIds], references: [id])
+  projectIds    String[]  @db.ObjectId
+  aggregates    Aggregate[]
+
+  @@map("transcripts")
+}
+
+model SubtitleSegment {
+  id           String @id @default(auto()) @map("_id") @db.ObjectId
+  startTime    Int    // in milliseconds
+  endTime      Int    // in milliseconds
+  text         String
+  index        Int    // order in the transcript
+  
+  // Relations
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  transcriptId String     @db.ObjectId
+
+  @@map("subtitle_segments")
+}
+
+model Project {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  transcripts   Transcript[] @relation(fields: [transcriptIds], references: [id])
+  transcriptIds String[]     @db.ObjectId
+  aggregates    Aggregate[]
+
+  @@map("projects")
+}
+
+model Aggregate {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  startSegmentIndex Int
+  endSegmentIndex   Int
+  text              String   // combined text of all segments
+  startTime         Int      // in milliseconds
+  endTime           Int      // in milliseconds
+  createdAt         DateTime @default(now())
+  order             Int      @default(0) // position in the narrative sequence
+  
+  // Relations
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  transcriptId String     @db.ObjectId
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId    String     @db.ObjectId
+
+  @@map("aggregates")
+}
